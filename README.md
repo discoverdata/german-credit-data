@@ -3,7 +3,7 @@ German Credit Data Analysis
 Varun Khanna
 28 January 2019
 
-``` r
+```r
 knitr::opts_chunk$set(fig.width = 10, fig.height = 8, fig.path = 'Figs/', warning = FALSE, message = FALSE)
 ```
 
@@ -31,7 +31,7 @@ The German Credit Data is a public data downloaded from \[UCI Machine Learning R
 Load the data, functions and the libraries
 ------------------------------------------
 
-``` r
+```r
 library("tidyverse")
 library("plotly")
 library("knitr")
@@ -43,7 +43,7 @@ library("rpart.plot")
 library("kableExtra")
 ```
 
-``` r
+```r
 # This function calculates Confusion matrix (CM). CM is a very useful tool and is called CM because it reveals how confused your model is betrween two classes 
 cm <- function(model, data){
 confusionMatrix(predict(model, newdata = data), data$credit_rating)
@@ -91,7 +91,7 @@ chooseMajorityVote <- function(x) {
 }
 ```
 
-``` r
+```r
 data <- read_delim("data/german.data", delim = "\t", col_names = F)
 
 german.colnames <- c("account_status","months","credit_history","purpose",
@@ -118,7 +118,7 @@ head(data)
     ## #   credit_cards <dbl>, job <chr>, dependents <dbl>, phone <chr>,
     ## #   foreign_worker <chr>, credit_rating <dbl>
 
-``` r
+```r
 # Convert credit rating to categorical factors
 data <- data %>% mutate(credit_rating = factor(ifelse(credit_rating == 1, "good","bad"), level = c("bad","good")))
 ```
@@ -128,7 +128,7 @@ Exploratory data analysis
 
 Now that we have loaded the data it is important to understand the data before attempting any modeling.
 
-``` r
+```r
 # look at the structure of the data
 glimpse(data)
 ```
@@ -157,7 +157,7 @@ glimpse(data)
     ## $ foreign_worker     <chr> "A201", "A201", "A201", "A201", "A201", "A201…
     ## $ credit_rating      <fct> good, bad, good, good, bad, good, good, good,…
 
-``` r
+```r
 # proportion of people with good and bad credit
 prop.table(table(data$credit_rating))
 ```
@@ -166,7 +166,7 @@ prop.table(table(data$credit_rating))
     ##  bad good 
     ##  0.3  0.7
 
-``` r
+```r
 # calculate the proportion of good and bad credit ratings for all ages
 ageCredit <-  as.data.frame((prop.table(table(data$age,data$credit_rating),1)))
 names(ageCredit) <- c("age", "credit_rating", "proportion")
@@ -188,7 +188,7 @@ subplot(p1,p1, titleX = T)
 
 ![](Figs/eda-1.png)
 
-``` r
+```r
 # Look at the descriptive stats for numeric variables like the month, age and credit amount.
 
 amount <- summary(data$credit_amount, digits = 2) 
@@ -297,7 +297,8 @@ month
 </tr>
 </tbody>
 </table>
-``` r
+
+```r
 # Plot numeric variables individually
 
 par(mfrow = c(1,3))
@@ -326,7 +327,7 @@ The $\\chi^2 = \\sum \\frac {(O - E)^2}{E}$ statistics is used to determine whet
 
 We are going to use the Chi-square test of Independence below:
 
-``` r
+```r
 # credit_rating vs account_status
 with(data, CrossTable(credit_rating, account_status, digits = 1, prop.chisq = F, chisq = T))
 ```
@@ -373,7 +374,7 @@ with(data, CrossTable(credit_rating, account_status, digits = 1, prop.chisq = F,
     ## 
     ## 
 
-``` r
+```r
 # credit_rating vs savings
 with(data, CrossTable(credit_rating, savings, digits = 1, prop.chisq = F, chisq = T))
 ```
@@ -420,7 +421,7 @@ with(data, CrossTable(credit_rating, savings, digits = 1, prop.chisq = F, chisq 
     ## 
     ## 
 
-``` r
+```r
 # credit_rating vs personal_status
 with(data, CrossTable(credit_rating, personal_status, digits = 1, prop.chisq = F, chisq = T))
 ```
@@ -467,7 +468,7 @@ with(data, CrossTable(credit_rating, personal_status, digits = 1, prop.chisq = F
     ## 
     ## 
 
-``` r
+```r
 # credit_rating vs dependents
 with(data,CrossTable(credit_rating,dependents, digits=1, prop.r=F, prop.t=F, prop.chisq=F, chisq=T))
 ```
@@ -511,7 +512,7 @@ with(data,CrossTable(credit_rating,dependents, digits=1, prop.r=F, prop.t=F, pro
     ## 
     ## 
 
-``` r
+```r
 # credit_rating vs job 
 with(data, CrossTable(credit_rating, job, digits = 1, prop.chisq = F, chisq = T))
 ```
@@ -558,7 +559,7 @@ with(data, CrossTable(credit_rating, job, digits = 1, prop.chisq = F, chisq = T)
     ## 
     ## 
 
-``` r
+```r
 # credit_rating vs phone
 with(data, CrossTable(credit_rating, phone, digits = 1, prop.chisq = F, chisq = T))
 ```
@@ -612,7 +613,7 @@ This analysis reveals that **account status, savings and personal status (marrie
 
 ### Plot the relationship between age, credit\_amount, and purpose
 
-``` r
+```r
 ggplot(data, aes(x = age, y = credit_amount, fill = credit_rating)) + geom_bar(stat = "identity") + facet_wrap(~ purpose) 
 ```
 
@@ -630,7 +631,7 @@ The plot also reveals that cases of default on the loan amount for the purpose o
 
 ### Plot the relationship between age, credit\_amount, and personal\_status
 
-``` r
+```r
 ggplot(data, aes(x = age, y = credit_amount, fill = credit_rating)) + geom_bar(stat = "identity") + facet_wrap(~ personal_status) 
 ```
 
@@ -640,7 +641,7 @@ The obvious observation from this plot is the absence of data on single women. W
 
 ### Let us remove less important variables, make new ones and do one-hot encoding
 
-``` r
+```r
 # Remove less important features based on the Chi-square analysis done before
  
 remove <- c("dependents","job","phone")
@@ -654,7 +655,7 @@ The idea is to compare major classification methods using the caret wrapper libr
 
 Let us first set up parallel processing
 
-``` r
+```r
 library(doParallel)
 x <- detectCores()
 cl <- makeCluster(x)
@@ -669,7 +670,7 @@ Split and train
 
 Use *caret package* to split the data into training and test set with an 80/20 split. We will use repeated cross-validation with 10 folds and 5 repeats for comparing models. The evaluation metric used will be logLoss, accuracy and kappa. The algorithms used for evaluation include:
 
-``` r
+```r
 # Define the metric to be used for evaluation
 metric <- "logLoss" # can also be "accuracy", "ROC", "Kappa", "Balanced_Accuracy"
 
@@ -716,7 +717,7 @@ The **disadvantges of DT** include:
 -   Given some training examples, there can be many DT that fit the training examples so which decision tree should be generated is a big question? One proposal is to search the space of DTs and prefer the smallest tree that fits the data.
 -   A single tree is unstable (high variance) and splits might differ by even the smallest of changes in the training data.
 
-``` r
+```r
 # CART
 set.seed(1)
 model_cart <- train(credit_rating ~., data = train, method = "rpart", trControl = ctrl, preProcess = c("nzv", "BoxCox"), metric = metric, tuneLength = 10)
@@ -727,7 +728,7 @@ rpart.plot(model_cart$finalModel,box.palette = "RdBu",shadow.col = "gray",nn = T
 
 ![](Figs/dt-1.png)
 
-``` r
+```r
 print(model_cart$bestTune)
 ```
 
@@ -752,7 +753,7 @@ RF creates a forest of a number of different DT sampling various features (this 
 -   Good for classification but not as good as for regression.
 -   Seems like a black box approach as a user does not have much control on how the model is built.
 
-``` r
+```r
 # Random forest
 set.seed(1)
 model_rf <- train(credit_rating ~., data = train, method = "rf", trControl = ctrl, preProcess = c("nzv", "BoxCox"), metric = metric, tuneLength = 10)
@@ -780,7 +781,7 @@ Both are dimension reduction techniques which are used for dimensionality reduct
 
 2.  If the classes are non linearly separable then LDA cannot be used.
 
-``` r
+```r
 # LDA 
 set.seed(1)
 model_lda <- train(credit_rating ~., data = train, method = "lda", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric)
@@ -790,7 +791,7 @@ model_lda <- train(credit_rating ~., data = train, method = "lda", trControl = c
 
 ### 4. Shrinkage Discriminant analysis (SDA)
 
-``` r
+```r
 # SDA 
 set.seed(1)
 model_sda <- train(credit_rating ~., data = train, method = "sda", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneLength = 10)
@@ -808,7 +809,7 @@ model_sda <- train(credit_rating ~., data = train, method = "sda", trControl = c
     ## Computing inverse correlation matrix (pooled across classes)
     ## Specified shrinkage intensity lambda (correlation matrix): 0.1111
 
-``` r
+```r
 print(model_sda$bestTune)
 ```
 
@@ -833,7 +834,7 @@ Support vector machine (SVM) is one of the most effective classifiers. SVM is fo
 2.  Takes a long time to train for large datasets.
 3.  Difficult to understand and interpret the final model.
 
-``` r
+```r
 # SVM 
 set.seed(1)
 model_svm <- train(credit_rating ~., data = train, method = "svmRadial", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneLength = 10)
@@ -861,7 +862,7 @@ It is one of the most fundamental and simplest supervised ML algorithms and is m
 1.  Does not learn a discriminative function from the training set.
 2.  Does not work if the data is noisy.
 
-``` r
+```r
 # kNN
 set.seed(1)
 model_knn <- train(credit_rating ~., data = train, method = "knn", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneLength = 10)
@@ -876,7 +877,7 @@ print(model_knn$bestTune) # Did not perform very well so not included in further
 
 Neural networks are algorithms inspired by biological neural networks. They progressively improve performance to do tasks by considering examples, generally without task-specific programming.
 
-``` r
+```r
 # NN
 set.seed(1)
 model_nnet <- train(credit_rating ~. , data = train, method = "nnet", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneLength = 10) 
@@ -893,7 +894,7 @@ model_nnet <- train(credit_rating ~. , data = train, method = "nnet", trControl 
     ## final  value 382.367325 
     ## converged
 
-``` r
+```r
 print(model_nnet$bestTune)
 ```
 
@@ -920,7 +921,7 @@ Boosting is an iterative procedure to fit submodels (usually decision trees) to 
 2.  Very time consuming and memory intensive.
 3.  Less interpretable
 
-``` r
+```r
 # GBM
 set.seed(1)
 model_gbm <- train(credit_rating ~ ., data = train, method = 'gbm', trControl = ctrl,preProcess = c("nzv", "BoxCox"),metric = metric, tuneLength = 10)
@@ -941,14 +942,14 @@ model_gbm <- train(credit_rating ~ ., data = train, method = 'gbm', trControl = 
     ##     40        0.8317            -nan     0.1000    0.0003
     ##     50        0.7919            -nan     0.1000   -0.0024
 
-``` r
+```r
 print(model_gbm$bestTune)
 ```
 
     ##    n.trees interaction.depth shrinkage n.minobsinnode
     ## 41      50                 5       0.1             10
 
-``` r
+```r
 stopCluster(cl)
 ```
 
@@ -958,7 +959,7 @@ XGBoost is one of the most sought after ensemble learning method.
 
 In boosting we start with a uniform probability distribution on given training instances and adaptively change the distribution of the training data. Initially, each training example has equal weight however, each round of boosting the weight are adjusted to better represent the misclassified examples. **In contrast to bagging ensemble techniques like RF, in which trees are grown to the maximum extent, boosting make trees that are not very deep thus highly interpretable.** Parameters like the number of trees or iterations, rate of learning, and the depth of the tree, could be optimally selected through validation techniques like k-fold cross-validation. Having a very complex model might lead to overfitting. So it is necessary to carefully choose the stopping criteria.
 
-``` r
+```r
 cl <- makeCluster(1)
 registerDoParallel(cl)
 
@@ -974,7 +975,7 @@ print(model_xgb$bestTune)
     ##      subsample
     ## 2071 0.8888889
 
-``` r
+```r
 stopCluster(cl)
 ```
 
@@ -991,7 +992,7 @@ The `splom` command (used later) creates a scatter plot matrix of all fold-trial
 
 It is also possible to calculate the significance of the differences between the metric distributions of different ML algorithms using `diff()`. Subsequently, we can summarize the results directly by calling the `summary()` function. A table of pair-wise statistical significance scores is created where the lower diagonal of the table shows p-values for the null hypothesis (distributions are the same), where a smaller value signifies distributions are not the same. The upper diagonal of the table shows the estimated difference between the distributions.
 
-``` r
+```r
 resample_results <- resamples(list(DT = model_cart, RF = model_rf, LDA = model_lda, SVM = model_svm, NN = model_nnet, GBM = model_gbm, SDA = model_sda, XGB = model_xgb))
 
 # Plot and compare the summary of resamples of different models
@@ -1010,7 +1011,7 @@ boxplot(t((summary_resamples$statistics$Sensitivity)[,-7])[,sorted], col = "stee
 Grid tune some of the models
 ----------------------------
 
-``` r
+```r
 x <- detectCores()
 cl <- makeCluster(x)
 registerDoParallel(cl)
@@ -1018,7 +1019,7 @@ registerDoParallel(cl)
 
 ### Tune Neural Network model
 
-``` r
+```r
 # ======================= NN model tuning ======================
 print(model_nnet$bestTune)
 ```
@@ -1026,7 +1027,7 @@ print(model_nnet$bestTune)
     ##    size decay
     ## 10    1   0.1
 
-``` r
+```r
 nnetGrid <-  expand.grid(decay = c(seq(0.2,0.8,0.01)), size = c(seq(0,3,1)))
 
 set.seed(1)
@@ -1048,7 +1049,7 @@ model_nnet <- train(credit_rating ~., data = train, method = "nnet", trControl =
     ## final  value 363.665715 
     ## stopped after 100 iterations
 
-``` r
+```r
 cm_nnet  <- cm(model_nnet, test)
 
 # print(cm_nnet)
@@ -1064,7 +1065,7 @@ cutoff <- roc_cutoff(model_nnet, test, "credit_rating")
 
 ![](Figs/tune_nn-1.png)
 
-``` r
+```r
 pred_nnet <- ifelse(p1[,1] >= cutoff, "bad","good")
 
 print("Optimized cutoff predictions")
@@ -1072,7 +1073,7 @@ print("Optimized cutoff predictions")
 
     ## [1] "Optimized cutoff predictions"
 
-``` r
+```r
 confusionMatrix(factor(pred_nnet, levels = c("bad","good")), test$credit_rating)
 ```
 
@@ -1105,7 +1106,7 @@ confusionMatrix(factor(pred_nnet, levels = c("bad","good")), test$credit_rating)
 
 ### Tune Support Vector Machine model
 
-``` r
+```r
 # ======================= SVM Model tuning ======================
 set.seed(1)
 print(model_svm$bestTune)
@@ -1114,7 +1115,7 @@ print(model_svm$bestTune)
     ##        sigma C
     ## 3 0.01740105 1
 
-``` r
+```r
 # For a smaller sigma, the decision boundary tends to be strict and sharp, in contrast for larger values, it tends to overfit.
 # Small value of C will cause the optimizer to look for a larger-margin separating hyperplane, even if that hyperplane misclassifies more points.
 
@@ -1148,7 +1149,7 @@ print("Optimized cutoff predictions")
 
     ## [1] "Optimized cutoff predictions"
 
-``` r
+```r
 confusionMatrix(factor(pred_svm, levels = c("bad","good")), test$credit_rating)
 ```
 
@@ -1702,11 +1703,12 @@ good
 </tr>
 </tbody>
 </table>
+
 According to the data out of 1000 applicant 700 are good (creditworthy). A lender without any model would incur \[0.7 \* 0.3 + 0.3 \* ( − 1.0)\] = −0.07 or **0.07 unit loss**. If the median loan amount is 2900 DM, then the **total loss will be 203000 DM and per applicant, the loss will be 203 DM.**
 
 However, from the best model a lender will have the following changes:
 
-``` r
+```r
 kable(as.matrix(cm_final_prob)) %>% kable_styling("striped", full_width = F) %>%  column_spec(1, bold = T, border_right = T)
 ```
 
@@ -1748,6 +1750,7 @@ good
 </tr>
 </tbody>
 </table>
+
 57.5% (115/200) of the customers will be correctly classified as good. 12.5% (25/200) of customers will be classified as of bad credit profile when they have good credit history while only 6% (12/200) of the customers will be wrongly classified having good credit profile when they are not creditworthy.
 
 therefore, the lender will have \[0.575 \* 0.3 + 0.125 \* ( − 0.3)+0.06 \* ( − 1)\] = +0.075 or **0.075 unit profit**. With the median amount 2900 DM, the **total profit will be 217500 DM and per applicant profit will be 217.5.**
