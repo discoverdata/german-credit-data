@@ -1182,7 +1182,7 @@ confusionMatrix(factor(pred_svm, levels = c("bad","good")), test$credit_rating)
 
 ### Tune Shrinkage Discriminant Analysis model
 
-``` r
+```r
 # ======================= SDA model tuning ======================
 set.seed(1)
 print(model_sda$bestTune)
@@ -1191,7 +1191,7 @@ print(model_sda$bestTune)
     ##   diagonal    lambda
     ## 2    FALSE 0.1111111
 
-``` r
+```r
 sdaGrid <- expand.grid(lambda = seq(0,10,0.1), diagonal = c(FALSE,TRUE))
 
 model_sda <- train(credit_rating ~., data = train, method = "sda", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneGrid = sdaGrid)
@@ -1209,13 +1209,13 @@ model_sda <- train(credit_rating ~., data = train, method = "sda", trControl = c
     ## Computing inverse correlation matrix (pooled across classes)
     ## Specified shrinkage intensity lambda (correlation matrix): 0.1
 
-``` r
+```r
 cm_sda  <- cm(model_sda, test)
 ```
 
     ## Prediction uses 35 features.
 
-``` r
+```r
 #print(cm_sda)
 
 # Calculate the probabilites scores
@@ -1224,7 +1224,7 @@ p3 <- predict(model_sda, newdata = test, type = "prob")
 
     ## Prediction uses 35 features.
 
-``` r
+```r
 # Draw the ROC plots to compare default cutoff value and best cutoff value
 
 cutoff <- roc_cutoff(model_sda, test, "credit_rating")
@@ -1234,7 +1234,7 @@ cutoff <- roc_cutoff(model_sda, test, "credit_rating")
 
 ![](Figs/tune_sda-1.png)
 
-``` r
+```r
 pred_sda <- ifelse(p3[,1] >= cutoff, "bad","good")
 
 print("Optimized cutoff predictions")
@@ -1242,7 +1242,7 @@ print("Optimized cutoff predictions")
 
     ## [1] "Optimized cutoff predictions"
 
-``` r
+```r
 confusionMatrix(factor(pred_sda, levels = c("bad","good")), test$credit_rating)
 ```
 
@@ -1273,14 +1273,14 @@ confusionMatrix(factor(pred_sda, levels = c("bad","good")), test$credit_rating)
     ##        'Positive' Class : bad             
     ## 
 
-``` r
+```r
 # Stop the cluster
 stopCluster(cl)
 ```
 
 ### Let us compare the final tuned models
 
-``` r
+```r
 resample_results <- resamples(list(NN = model_nnet, SVM = model_svm, SDA = model_sda))
 
 # Print the results
@@ -1307,28 +1307,28 @@ summary(resample_results,metric = c("Kappa","Accuracy"))
     ## SVM 0.6875 0.712500 0.73125 0.74375 0.771875 0.8250    0
     ## SDA 0.7000 0.712500 0.72500 0.74750 0.781250 0.8375    0
 
-``` r
+```r
 # Plot Kappa values
 densityplot(resample_results , metric = "Kappa" ,auto.key = list(columns = 3))
 ```
 
 ![](Figs/comapareAgain-1.png)
 
-``` r
+```r
 # plot all (higher is better)
 bwplot(resample_results , metric = c("Kappa","Balanced_Accuracy"))
 ```
 
 ![](Figs/comapareAgain-2.png)
 
-``` r
+```r
 # plot logLoss values boxplots (lower is better)
 bwplot(resample_results , metric = c("logLoss","Sensitivity"))
 ```
 
 ![](Figs/comapareAgain-3.png)
 
-``` r
+```r
 # Find model correlation
 mcr <- modelCor(resample_results)
 print(mcr)
@@ -1339,14 +1339,14 @@ print(mcr)
     ## SVM 0.7791729 1.0000000 0.9426356
     ## SDA 0.7224616 0.9426356 1.0000000
 
-``` r
+```r
 # Create a scatter plot matrix
 splom(resample_results)
 ```
 
 ![](Figs/comapareAgain-4.png)
 
-``` r
+```r
 # Statistical significance test
 differnce  <- diff(resample_results)
 # summarize the p-values for pair wise comparision
@@ -1450,7 +1450,7 @@ Consensus model
 
 Consensus model was created by combining the predictions from individual tuned models and taking the majority vote.
 
-``` r
+```r
 pred_all <- bind_cols(nnet = pred_nnet, svm = pred_svm, sda = pred_sda)
 
 pred_all$consensus <- apply(pred_all, 1, chooseMajorityVote)
@@ -1466,7 +1466,7 @@ print("==============Calculate Probabilities =============")
 
     ## [1] "==============Calculate Probabilities ============="
 
-``` r
+```r
 # Calculate probabilities of prediction and multiply by the balanced accuracy of each model for weighted predictions.
 
 algos <- names(pred_all)[-length(names(pred_all))]
@@ -1478,12 +1478,12 @@ for (algo in algos)
 assign(paste0("spec","_",algo), specificity(factor(get(paste0("pred","_",algo)), levels = c("bad","good")), test$credit_rating))
   }
 
- print("==============balanced accuracy score ========") 
+ print("============== weighted probability score ========") 
 ```
 
-    ## [1] "==============balanced accuracy score ========"
+    ## [1] "==============weighted probability score ========"
 
-``` r
+```r
 prob_all <- bind_cols(nnet = p1[,1] * (sens_nnet + spec_nnet)/2, svm = p2[,1] * (sens_svm + spec_svm)/2, sda = p3[,1] * (sens_sda + spec_sda)/2) 
 
  prob_all$final_ba <- rowMeans(prob_all) 
@@ -1510,7 +1510,7 @@ prob_all <- bind_cols(nnet = p1[,1] * (sens_nnet + spec_nnet)/2, svm = p2[,1] * 
 
 ![](Figs/consensus_model-1.png)
 
-``` r
+```r
  prob_all$labels_ba <- ifelse(prob_all$final_ba >= cutoff, "bad","good") 
  print(prob_all) 
 ```
@@ -1530,7 +1530,7 @@ prob_all <- bind_cols(nnet = p1[,1] * (sens_nnet + spec_nnet)/2, svm = p2[,1] * 
     ## 10 0.209  0.305  0.244    0.253  good     
     ## # … with 190 more rows
 
-``` r
+```r
  cm_final_prob <- confusionMatrix(factor(prob_all$labels_ba, levels = c("bad","good")), test$credit_rating) 
  print(cm_final_prob) 
 ```
@@ -1567,7 +1567,7 @@ Ensemble model
 
 Lets us build an ensemble models with and 'glm' as a meta-learner and our three tuned models(nn, svm and sda) as base learners. Finally, we can compare the results of ensemble models with individual models and the consensus predictions of individual models.
 
-``` r
+```r
  library("doParallel") 
  cl <- makeCluster(2) 
  registerDoParallel(cl) 
@@ -1581,8 +1581,6 @@ Lets us build an ensemble models with and 'glm' as a meta-learner and our three 
 
  stack.glm_customized <- caretStack(models, method = "glm",metric = metric, trControl = stackControl) 
 
- stack.lda_customized <- caretStack(models, method = "lda",metric = metric, trControl = stackControl) 
-
  stopCluster(cl) 
 
  print("=========glm ensemble model========") 
@@ -1590,13 +1588,13 @@ Lets us build an ensemble models with and 'glm' as a meta-learner and our three 
 
     ## [1] "=========glm ensemble model========"
 
-``` r
+```r
  p_glm_stack <- predict(stack.glm_customized, newdata = test, type = "prob") %>% data.frame(bad = ., good = 1- .) 
 ```
 
     ## Prediction uses 35 features.
 
-``` r
+```r
  cutoff <- roc_cutoff(stack.glm_customized, test, "credit_rating") 
 ```
 
@@ -1604,7 +1602,7 @@ Lets us build an ensemble models with and 'glm' as a meta-learner and our three 
 
 ![](Figs/ensemble_model-1.png)
 
-``` r
+```r
  pred_glm_stack <- ifelse(p_glm_stack[,1] >= cutoff, "bad","good") 
 
  cm_ensemble_glm <- confusionMatrix(factor(pred_glm_stack, levels = c("bad","good")), test$credit_rating) 
@@ -1646,7 +1644,7 @@ All these statistical tests must be translated into profits for the lender. Let 
 
 ### Cost Matrix:
 
-``` r
+```r
 ref = data.frame(bad = 0, good = -0.30)
 pred = data.frame(bad = -1.00 , good = +0.30 )
 
