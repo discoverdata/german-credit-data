@@ -1,0 +1,782 @@
+---
+title: "German Credit Data Analysis"
+author: "Varun Khanna"
+date: "28 January 2019"
+output: github_document
+always_allow_html: yes
+---
+  
+```{r global_options, echo=TRUE, message=FALSE}
+knitr::opts_chunk$set(fig.width = 10, fig.height = 8, fig.path = 'Figs/', warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+When a lending institution like a bank receives a loan application, based on their specific lending criteria, they assess the application and decide whether to approve or deny the loan. Two types of outcomes are associated with the lender’s decision:
+  
+- If the applicant is worthy (have a good credit profile), then not approving the loan will make the lender lose out on the earning opportunity.
+
+- If the applicant is not worthy (have a bad credit profile), then approving the loan will likely result in financial loss to the lender.
+
+The second outcome is associated with a greater risk as an untrustworthy borrower has a higher chance of default and thus making it harder for lenders to recover even the borrowed amount. Therefore, it is imperative for a lender to evaluate the risks associated with lending the money to a customer.
+
+## Aims
+
+This is a demonstration in R using the *caret* package to assess the risk of lending the money to the customer by studying the applicant's demographic and social-economic profile. I have compared several supervised machine learning algorithms and maximized the sensitivity of the model to detect borrowers with bad credit profile. In the business parlance, I have tried to minimize the risk and maximize the profit for the lenders as shown in __[cost profit analysis](#cost-and-profit-analysis)__.
+
+# Data
+
+The German Credit Data is a public data downloaded from [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/datasets/Statlog+(German+Credit+Data). The dataset contains 1000 entries with 20 categorical features prepared by Prof. Hofmann. Each entry represents a customer and is classified as good or bad credit risk, according to the set of features.
+
+## Load the data, functions and the libraries
+
+```{r load_packages}
+library("tidyverse")
+library("plotly")
+library("knitr")
+library("gmodels")
+library("caret")
+library("ROCR")
+library("caretEnsemble")
+library("rpart.plot")
+library("kableExtra")
+```
+
+```{r load_functions}
+
+# This function calculates Confusion matrix (CM). CM is a very useful tool and is called CM because it reveals how confused your model is betrween two classes 
+cm <- function(model, data){
+confusionMatrix(predict(model, newdata = data), data$credit_rating)
+}
+
+# This function identifies and plots the best probability cutoff values by maximizing tpr and fpr values from the ROC plot 
+roc_cutoff <- function(model, data, response) {
+# Check for the stack models  
+if(str_detect(deparse(substitute(model)),'stack')) {
+pred <- predict(model, data, type = "prob") %>% data.frame(bad = ., good = 1 -.)
+pred <- pred[,1]
+}
+else{
+pred <- predict(model, data, type = 'prob')[,1]
+}
+# ROCR considers the later level to be the positive class. The logic is that 1 is the positive class and 0 the negative and since 0 < 1 and "bad" < "good", ROCR considers "good" to be the positive class here. therefore label.ordering
+pred <- prediction(pred, data[,response], label.ordering = c("good","bad"))
+eval <- performance(pred, "tpr","fpr")
+plot(eval)
+
+# maximize the TPR and FPR
+max <- which.max(slot(eval,"y.values")[[1]] +  1 - slot(eval,"x.values")[[1]])
+# get the best cutoff value
+cutoff <- slot(eval, "alpha.values")[[1]][max]
+tpr <- slot(eval, "y.values")[[1]][max]
+fpr <- slot(eval, "x.values")[[1]][max]
+abline(h = tpr, v = fpr, lty = 2, col = "blue") # best cutoff
+text(0.7,0.2, paste0("At best cutoff = ", round(cutoff,2)), col = "blue")
+# Default cutoff
+default <- last(which(slot(eval, "alpha.values")[[1]] >= 0.5))
+defaulty <- slot(eval,"y.values")[[1]][default]
+defaultx <- slot(eval,"x.values")[[1]][default]
+abline(h = defaulty, v = defaultx, col = "red", lty = 2) # Default cutoff
+text(0.7,0.3, paste0("At default cutoff = ", 0.50), col = "red")
+return(cutoff)
+}
+
+# This function returns the most common outcome of the ML algos during consensus modeling
+
+chooseMajorityVote <- function(x) {
+    tabulatedOutcomes <- table(x)
+    sortedOutcomes <- sort(tabulatedOutcomes, decreasing = TRUE)
+    mostCommonLabel <- names(sortedOutcomes)[1]
+    return(mostCommonLabel)
+}
+```
+
+
+```{r load_data}
+data <- read_delim("data/german.data", delim = "\t", col_names = F)
+
+german.colnames <- c("account_status","months","credit_history","purpose",
+"credit_amount","savings","employment","installment_rate","personal_status","guarantors","residence","property","age","other_installments","housing","credit_cards","job","dependents","phone","foreign_worker","credit_rating")
+
+colnames(data) <- german.colnames
+
+# Let us look at the first six rows
+head(data)
+
+# Convert credit rating to categorical factors
+data <- data %>% mutate(credit_rating = factor(ifelse(credit_rating == 1, "good","bad"), level = c("bad","good")))
+```
+
+## Exploratory data analysis
+Now that we have loaded the data it is important to understand the data before attempting any modeling.
+
+```{r eda}
+# look at the structure of the data
+glimpse(data)
+# proportion of people with good and bad credit
+prop.table(table(data$credit_rating))
+
+# calculate the proportion of good and bad credit ratings for all ages
+ageCredit <-  as.data.frame((prop.table(table(data$age,data$credit_rating),1)))
+names(ageCredit) <- c("age", "credit_rating", "proportion")
+# plot the proportion
+p1 <- ggplot(ageCredit, aes(x = age, y = proportion, fill = credit_rating)) + geom_bar(stat = "identity", width = 1)  + scale_x_discrete(breaks = seq(19,75,3), labels = seq(19,75,3)) + theme(legend.position = "none")
+
+# Plot overlapping histograms of the age distribution for good and bad credit_ratings
+df_good <- data[data$credit_rating == "good","age"]
+df_bad = data[data$credit_rating == "bad","age"]
+
+f1 <- list(family = "Arial, sans-serif", size = 18, color = "grey")
+xaxis <- list(title = "Age",titlefont = f1)
+yaxis <- list(title = "Number of samples",titlefont = f1)
+
+p1 <- plot_ly(alpha = 0.8) %>% add_histogram(x = df_bad$age, name = "bad", color = I('#999999')) %>% add_histogram( x = df_good$age, name = "good", color = I('#E69F00')) %>% layout(barmode = "overlay", xaxis = xaxis, yaxis = yaxis)
+
+subplot(p1,p1, titleX = T)
+
+# Look at the descriptive stats for numeric variables like the month, age and credit amount.
+
+amount <- summary(data$credit_amount, digits = 2) 
+age <- summary(data$age, digits = 2)
+month <- summary(data$months, digits = 2)
+
+continuousVariables <- rbind(amount,age,month)
+
+kable(continuousVariables)
+
+# Plot numeric variables individually
+
+par(mfrow = c(1,3))
+# Frequency distribution of the credit amount
+brk <- 30
+hist(data$credit_amount, breaks = brk, main = "Distribution of the credit amount", xlab = "Amount", col = "skyblue", panel.first = grid())
+
+# Age distribution of debtors 
+hist(data$age, breaks = brk, main = "Distribution of the age", xlab = "Age", col = "darkmagenta", panel.first = grid())
+
+# Duration of the loan 
+hist(data$months, breaks = brk, main = "Distribution of the duration of the months", xlab = "Months", col = "darkgreen", panel.first = grid())
+```
+
+The plots above show that most of the loan seekers are between 20 and 40 years of age and the amount of the loan sought is usually below 5000 euros. Furthermore, the majority of the loans are between 4 and 30 months. Note that all three variables show marked positive skewness.
+
+### Cross-tabulation and Chi-squared values 
+The $\chi^2 = \sum \frac {(O - E)^2}{E}$ statistics is used to determine whether an observed number differs either by chance from what was expected or something else. It is most often used to analyze data that consist of count or frequencies. The $\chi^2$ test is used in two similar but distinct circumstances:
+  
+- __Good of fit test__ for estimating how closely an observed distribution matches an expected distribution. 
+
+- __Chi-square test of Independence__ for estimating whether there is an association between two random variables. *i.e* are they independent.
+
+We are going to use the Chi-square test of Independence below: 
+  
+```{r stats}
+# credit_rating vs account_status
+with(data, CrossTable(credit_rating, account_status, digits = 1, prop.chisq = F, chisq = T))
+# credit_rating vs savings
+with(data, CrossTable(credit_rating, savings, digits = 1, prop.chisq = F, chisq = T))
+# credit_rating vs personal_status
+with(data, CrossTable(credit_rating, personal_status, digits = 1, prop.chisq = F, chisq = T))
+
+# credit_rating vs dependents
+with(data,CrossTable(credit_rating,dependents, digits=1, prop.r=F, prop.t=F, prop.chisq=F, chisq=T))
+
+# credit_rating vs job 
+with(data, CrossTable(credit_rating, job, digits = 1, prop.chisq = F, chisq = T))
+# credit_rating vs phone
+with(data, CrossTable(credit_rating, phone, digits = 1, prop.chisq = F, chisq = T))
+```
+
+This analysis reveals that __account status, savings and personal status (married/single)__ influence the credit rating (the chi-squared). On the other hand variables like the __number of dependents, job type and owning a phone connection__ does not impact credit rating. Perhaps it is fair to say that people with good credit continue to maintain the status irrespective of the number of dependents to care for and whether they are employed or unemployed.
+
+### Plot the relationship between age, credit_amount, and purpose
+
+```{r facetplots1}
+ggplot(data, aes(x = age, y = credit_amount, fill = credit_rating)) + geom_bar(stat = "identity") + facet_wrap(~ purpose) 
+```
+
+It is interesting to note that most of the loans are sought for:
+  
+- A40: car (new)
+- A41: car (used) 
+- A42: furniture/equipment
+- A43: radio/television
+- A49: business
+
+The plot also reveals that cases of default on the loan amount for the purpose of buying used cars are less than in the cases of buying new cars. Also, lower the age of the debtor higher the risk of recovering the loan amount (hence the bad credit).  
+
+### Plot the relationship between age, credit_amount, and personal_status
+
+```{r facetplots2}
+ggplot(data, aes(x = age, y = credit_amount, fill = credit_rating)) + geom_bar(stat = "identity") + facet_wrap(~ personal_status) 
+```
+
+The obvious observation from this plot is the absence of data on single women. We cannot say for sure if the data is missing or single women are not applying for the loan. It is also surprising to note that married males (A94) borrow far less than single males (A93). Further, single males (A93) apply for more loan than divorced or married females. As before, young age and high loan amount correspond to bad credit rating. 
+
+### Let us remove less important variables, make new ones and do one-hot encoding
+
+```{r remove}
+# Remove less important features based on the Chi-square analysis done before
+ 
+remove <- c("dependents","job","phone")
+data <- select(data, -remove)
+```
+
+## Models
+
+The idea is to compare major classification methods using the caret wrapper library. For the list on available model available in caret please see [caret manual](https://topepo.github.io/caret/available-models.html).  
+
+Let us first set up parallel processing
+
+```{r pp}
+library(doParallel)
+x <- detectCores()
+cl <- makeCluster(x)
+registerDoParallel(cl)
+print(paste0("Number of registered cores is ",x))
+```
+
+## Split and train 
+
+Use *caret package* to split the data into training and test set with an 80/20 split. We will use repeated cross-validation with 10 folds and 5 repeats for comparing models. The evaluation metric used will be logLoss, accuracy and kappa. The algorithms used for evaluation include:
+
+```{r split_&_train}
+# Define the metric to be used for evaluation
+metric <- "logLoss" # can also be "accuracy", "ROC", "Kappa", "Balanced_Accuracy"
+
+set.seed(77984)
+# Split the data into 80/20 split
+trainIndex <- createDataPartition(data$credit_rating, p = 0.8, list = F)
+train <- data[trainIndex, ]
+test <- data[-trainIndex, ]
+
+# Training control parameters
+ctrl <- trainControl(method = "cv", number = 10, savePredictions = TRUE, classProbs = TRUE, summaryFunction = multiClassSummary)
+```
+
+## Try various models
+
+### 1. Classification and Regression Tree (CART)
+  
+The Decision Trees (DT) or Classification and Regression Tree (CART) is a popular ML technique and is used for both classification and regression problems. The _recursive algorithm_ works by repeatedly partitioning the data into multiple subspaces such that the group within the subspace is as homogenous as possible. The DT generated by the CART model is generally visualized as a binary tree. The tree grows from the top (root), and at each node, the algorithm decides the best split cutoff that results in greatest purity. The tree will stop growing if (Zhang 2016):
+  
+1. All leaf nodes are pure i.e contains examples of the single class.
+2. A pre-specified minimum number of training observations that cannot be assigned to each leaf nodes with any splitting methods.
+3. The number of observations in the leaf node reaches the pre-specified minimum one.
+
+__Choosing the split point in trees__
+
+For regression trees, the split cutoff is defined so that the residual sum of the squared (RSS) error is minimized across the training examples that fall within a subpartition. $RSS = sum((Observed - Predicted)^2)$. In the classification model, the split point is defined as based on purity and the two measures of purity generally used are _Gini Index_ and _entropy_. For a given subpartition, $Gini = sum(p(1-p))$ and $entropy = -1*sum(p*log(p))$, where p is the proportion of misclassified observations within the subpartition. The Gini index and the entropy range from 0 (greatest purity) to 1 (maximum degree of impurity).
+
+__Pruning the tree__
+
+Generally, fully grown trees tend to model the noise in the data and might lead to poor predictive performance on the unseen data. A common strategy employed to limit the overfitting is to prune back the tree resulting in a simpler tree with fewer splits and better interpretation at the cost of a little bias (James et al. 2014, P. Bruce and Bruce (2017)). The idea is to search for a smaller subtree that can give us comparable results to the fully grown tree. One robust strategy of pruning the tree is to stop growing the tree if the split does not significantly improve the overall quality of the model. In _rpart_ package, this is controlled by _complexity parameter (cp)_ which imposes a penalty to the tree for too many splits. The higher the _cp_ smaller the tree.
+
+
+There are many __advantages of DT__.
+
+* Simple and easy to understand, interpret and visualize.
+* Help in variable screening or feature selection.
+* Can handle both numerical and categorical data.
+* Requires little effort in data preparation.
+* Can model the nonlinear relationships between the features.
+
+The __disadvantges of DT__ include:
+  
+  * Overfitting of the data. DT has the tendency to build complex models which do not generalize the data well. Pruning is useful in this case.
+* Given some training examples, there can be many DT that fit the training examples so which decision tree should be generated is a big question? One proposal is to search the space of DTs and prefer the smallest tree that fits the data.
+* A single tree is unstable (high variance) and splits might differ by even the smallest of changes in the training data. 
+
+```{r dt}
+# CART
+set.seed(1)
+model_cart <- train(credit_rating ~., data = train, method = "rpart", trControl = ctrl, preProcess = c("nzv", "BoxCox"), metric = metric, tuneLength = 10)
+
+# Draw the tree model
+rpart.plot(model_cart$finalModel,box.palette = "RdBu",shadow.col = "gray",nn = TRUE)
+
+print(model_cart$bestTune)
+```
+
+### 2. Random Forest (RF)
+
+Random Forest (RF) is one of the most popular and powerful __Ensemble approach__ for classification and regression tasks. Sometimes it is not sufficient to rely on one ML model to produce reliable results. Ensemble learning combines multiple models to generate a consensus output from several methods. The models that make up the ensemble also called as base learners, could either be the same learning algorithm or different learning techniques. __Bagging (Bootstrap aggregation) and Boosting__ are two widely used methods for ensemble learners.
+
+RF creates a forest of a number of different DT sampling various features (this is called an ) and in general more trees in the forest more robust the model which results in higher accuracy. The main idea behind the ensemble approach is that a group of weak learners can come together to form a strong learner. Data is sampled with replacement ( __bagging__ ) and fed into these learners for training. To classify a new object based on its features each tree votes for a class. For classification the algorithm chooses the final label having the most votes over all the other trees in the forest while in regression it takes the average of the output by different trees. 
+Thus ensemble methods reduce the variance and increase the performance.
+
+__Advantages of RF__
+
+* Can be used for both classification and regression task
+* Can handle missing values
+* Does not overfit the model
+* Can handle data with higher dimensionality
+
+__Disadvantages of RF__
+
+* Good for classification but not as good as for regression.
+* Seems like a black box approach as a user does not have much control on how the model is built.
+
+```{r rf}
+# Random forest
+set.seed(1)
+model_rf <- train(credit_rating ~., data = train, method = "rf", trControl = ctrl, preProcess = c("nzv", "BoxCox"), metric = metric, tuneLength = 10)
+
+print(model_rf$bestTune)
+
+```
+
+### 3. Linear Discriminant Analysis (LDA)
+
+Ronald Fisher described Linear Discriminant Analysis (LDA) or Fisher Linear Discriminant Analysis in 1936 for a two class problem later it generalized as a multiclass LDA or Multiple Discriminant Analysis by C.R Rao 1948. Along with Principal Component Analysis (PCA), it is one of the most commonly used techniques for dimensionality reduction as a preprocessing step in machine learning applications. The aim is to project the dataset into lower dimension space with a good separability in order to avoid overfitting due to a large number of features and also to reduce computational cost.
+
+__PCA Vs LDA__
+
+Both are dimension reduction techniques which are used for dimensionality reduction. However, there are some key differences
+
+1. PCA is an unsupervised technique while LDA is a supervised algorithm.
+2. PCA finds the most accurate representation for data in low dimension space by projecting the data in direction of maximum variance. However, the direction of maximum variance may not be useful for classification. LDA on the other hand projects to the direction that maximizes class separation (by maximizing the mean between two categories while minimizing the scatter).
+
+__Disadvantages of LDA__
+
+1. Small Sample Size (SSS). It occurs when the sample size is much smaller than the number of features. This can be possibly solved with Regularization (RLDA).
+
+2. If the classes are non linearly separable then LDA cannot be used.
+
+```{r lda}
+
+# LDA 
+set.seed(1)
+model_lda <- train(credit_rating ~., data = train, method = "lda", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric)
+
+# print(model_lda$bestTune)
+```
+
+### 4. Shrinkage Discriminant analysis (SDA)
+
+```{r sda}
+
+# SDA 
+set.seed(1)
+model_sda <- train(credit_rating ~., data = train, method = "sda", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneLength = 10)
+
+print(model_sda$bestTune)
+```
+
+### 5. Support Vector Machine (SVM)
+Support vector machine (SVM) is one of the most effective classifiers. SVM is formally defined by an optimal separating hyperplane such that it maximizes the margin between support vectors of either class. The parameter _C_ allow the user to dictate the tradeoff between having a wide margin and correctly classifying training data. A higher value of _C_ implies fewer errors on the training data however this comes at an expense of wide margin. In case of non linearly separable data, the data is projected into space where it is linearly separable using a kernel function and finds a hyperplane in this space. There are different kernel functions that can be used with SVM such as radial basis, hyperbolic, linear and polynomial.  
+
+__Advantages of SVM__
+
+1. The risk of overfitting is less in SVM.
+2. It works well for high dimensional data.
+3. Unlike NN, SVM is not solved for local minima.
+4. With the appropriate kernel, it is possible to solve any complex problem.
+5. Works well with even unstructured and semi-structured data like text, images, and trees.
+
+__Disadvantages of SVM__
+
+1. Choosing a good kernel function is not easy.
+2. Takes a long time to train for large datasets.
+3. Difficult to understand and interpret the final model.
+
+```{r svm}
+# SVM 
+set.seed(1)
+model_svm <- train(credit_rating ~., data = train, method = "svmRadial", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneLength = 10)
+
+print(model_svm$bestTune)
+```
+
+### 6. k-Nearest neighbours (kNN)
+
+It is one of the most fundamental and simplest supervised ML algorithms and is mostly used for classification. It classifies a data point based on how its neighbours are classified. _k_ in __kNN__ is a parameter that accounts for the number of nearest neighbours to include in the majority voting process. Choosing the right value of _k_ is a process called parameter tuning and is important for better accuracy. Most common ways to choose the value of _k_ are:
+  
+1. Sqrt(n), where n = total number of observations
+2. Odd value of _k_ is selected to avoid confusion between two classes of data. 
+
+__Advantages of kNN__
+
+1. Works well with small and clean data.
+2. Easy to interpret.
+
+__Disadvantages of kNN__
+
+1. Does not learn a discriminative function from the training set.
+2. Does not work if the data is noisy.
+
+```{r knn}
+# kNN
+set.seed(1)
+model_knn <- train(credit_rating ~., data = train, method = "knn", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneLength = 10)
+
+print(model_knn$bestTune) # Did not perform very well so not included in further analysis
+```
+
+### 7. Neural Net (NN)
+
+Neural networks are algorithms inspired by biological neural networks. They progressively improve performance to do tasks by considering examples, generally without task-specific programming.  
+
+```{r nn}
+# NN
+set.seed(1)
+model_nnet <- train(credit_rating ~. , data = train, method = "nnet", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneLength = 10) 
+
+print(model_nnet$bestTune)
+```
+
+### 8. Gradient Boosting Machine (GBM)
+
+Most Kaggale winners use some kind of ensemble or stack of various models, one particular algorithm that is part of most of the ensembles is a GBM or some kind of variant. It is based on _Boosting ensemble technique_. 
+
+> Boosting (Freud and Shapire, 1996) - algorithm fits many weak classifiers to reweighted versions of the training data. Classify final examples by majority voting.
+
+Boosting is an iterative procedure to fit submodels (usually decision trees) to residuals. In boosting, the trees are built sequentially rather than independently such that each subsequent tree aims to reduce the error of the previous tree. Each tree learns from its predecessor and updates the residual errors. Hence the tree that grows next will be better in explaining the data.
+
+__Advantages of GBM__
+
+1. Powerful and hard to beat.
+2. Highly flexible. It provides several hyperparameters tuning options.
+3. Can handle missing data and no preprocessing is required. 
+
+__Disadvantages of GBM__
+
+1. Prone to overfitting. 
+2. Very time consuming and memory intensive.
+3. Less interpretable
+
+```{r gbm}
+# GBM
+set.seed(1)
+model_gbm <- train(credit_rating ~ ., data = train, method = 'gbm', trControl = ctrl,preProcess = c("nzv", "BoxCox"),metric = metric, tuneLength = 10)
+
+print(model_gbm$bestTune)
+stopCluster(cl)
+```
+
+### 10. eXtreme Gradient Boosting (XGB)
+
+XGBoost is one of the most sought after ensemble learning method. 
+
+In boosting we start with a uniform probability distribution on given training instances and adaptively change the distribution of the training data. Initially, each training example has equal weight however, each round of boosting the weight are adjusted to better represent the misclassified examples. 
+__In contrast to bagging ensemble techniques like RF, in which trees are grown to the maximum extent, boosting make trees that are not very deep thus highly interpretable.__ Parameters like the number of trees or iterations, rate of learning, and the depth of the tree, could be optimally selected through validation techniques like k-fold cross-validation. Having a very complex model might lead to overfitting. So it is necessary to carefully choose the stopping criteria.
+
+```{r xgb}
+cl <- makeCluster(1)
+registerDoParallel(cl)
+
+# XGB
+set.seed(1)
+model_xgb <- train(credit_rating ~ ., data = train, method = 'xgbTree', trControl = ctrl,preProcess = c("nzv", "BoxCox"),metric = metric, tuneLength = 10)
+
+print(model_xgb$bestTune)
+stopCluster(cl)
+```
+
+## Compare the models (Balanced Accuracy, Kappa and logLoss values)
+
+The `summary()` function will create a summary table for all the evaluation metrics comparing each algorithm in rows. 
+
+Density plots are a useful way to evaluate the overlap in the estimated behavior of algorithms (used later). 
+
+Boxplots are useful ways to visualize the spread of the estimated Accuracy of different methods. Note that the boxes are ordered from lowest to higher mean accuracy. 
+
+The `splom` command (used later) creates a scatter plot matrix of all fold-trial results for an algorithm compared to same fold-trial results for all other algorithms. This comes handy when considering whether the predictions from two different algorithms are correlated. If weakly correlated, they are good candidates for being combined in an ensemble prediction.
+
+It is also possible to calculate the significance of the differences between the metric distributions of different ML algorithms using `diff()`. Subsequently, we can summarize the results directly by calling the `summary()` function. A table of pair-wise statistical significance scores is created where the lower diagonal of the table shows p-values for the null hypothesis (distributions are the same), where a smaller value signifies distributions are not the same. The upper diagonal of the table shows the estimated difference between the distributions.
+
+```{r compare_models}
+resample_results <- resamples(list(DT = model_cart, RF = model_rf, LDA = model_lda, SVM = model_svm, NN = model_nnet, GBM = model_gbm, SDA = model_sda, XGB = model_xgb))
+
+# Plot and compare the summary of resamples of different models
+summary_resamples <- summary(resample_results,metric = c("Kappa","Balanced_Accuracy","logLoss", "Sensitivity"))
+par(mfrow = c(2,2))
+# Sort based on balanced Accuracy
+sorted <- order((t((summary_resamples$statistics$Balanced_Accuracy)[,-7]))[4,])
+boxplot(t((summary_resamples$statistics$Balanced_Accuracy)[,-7])[,sorted], col = "steelblue", main = "Balanced Accuracy", las =2)
+boxplot(t((summary_resamples$statistics$Kappa)[,-7])[,sorted], col = "steelblue", main = "Kappa", las = 2)
+boxplot(t((summary_resamples$statistics$logLoss)[,-7])[,sorted], col = "steelblue", main = "logLoss", las = 2)
+boxplot(t((summary_resamples$statistics$Sensitivity)[,-7])[,sorted], col = "steelblue", main = "Sensitivity", las = 2)
+```
+
+
+## Grid tune some of the models
+
+```{r pp_again}
+x <- detectCores()
+cl <- makeCluster(x)
+registerDoParallel(cl)
+```
+
+### Tune Neural Network model
+
+```{r tune_nn}
+# ======================= NN model tuning ======================
+print(model_nnet$bestTune)
+
+nnetGrid <-  expand.grid(decay = c(seq(0.2,0.8,0.01)), size = c(seq(0,3,1)))
+
+set.seed(1)
+model_nnet <- train(credit_rating ~., data = train, method = "nnet", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneGrid = nnetGrid)
+
+cm_nnet  <- cm(model_nnet, test)
+
+# print(cm_nnet)
+
+# Calculate the probabilites scores
+p1 <- predict(model_nnet, newdata = test, type = "prob")
+
+
+# Draw the ROC plots to compare default cutoff value and best cutoff value
+
+cutoff <- roc_cutoff(model_nnet, test, "credit_rating")
+
+pred_nnet <- ifelse(p1[,1] >= cutoff, "bad","good")
+
+print("Optimized cutoff predictions")
+
+confusionMatrix(factor(pred_nnet, levels = c("bad","good")), test$credit_rating)
+```
+
+### Tune Support Vector Machine model 
+
+```{r tune_svm}
+# ======================= SVM Model tuning ======================
+set.seed(1)
+print(model_svm$bestTune)
+# For a smaller sigma, the decision boundary tends to be strict and sharp, in contrast for larger values, it tends to overfit.
+# Small value of C will cause the optimizer to look for a larger-margin separating hyperplane, even if that hyperplane misclassifies more points.
+
+svmGrid <- expand.grid(sigma = c(seq(0.01,0.09,0.01)),
+                       C = c(seq(1,4,0.1)))
+
+
+model_svm <- train(credit_rating ~., data = train, method = "svmRadial", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneGrid = svmGrid)
+
+#print(model_svm)
+
+cm_svm  <- cm(model_svm, test)
+
+# print(cm_svm)
+
+# Calculate the probabilites scores
+p2 <- predict(model_svm, newdata = test, type = "prob")
+
+# Draw the ROC plots to compare default cutoff value and best cutoff value
+
+cutoff <- roc_cutoff(model_svm, test, "credit_rating")
+
+pred_svm <- ifelse(p2[,1] >= cutoff, "bad","good")
+
+print("Optimized cutoff predictions")
+
+confusionMatrix(factor(pred_svm, levels = c("bad","good")), test$credit_rating)
+```
+
+### Tune Shrinkage Discriminant Analysis model
+
+```{r tune_sda}
+# ======================= SDA model tuning ======================
+set.seed(1)
+print(model_sda$bestTune)
+
+sdaGrid <- expand.grid(lambda = seq(0,10,0.1), diagonal = c(FALSE,TRUE))
+
+model_sda <- train(credit_rating ~., data = train, method = "sda", trControl = ctrl, preProcess = c("nzv", "center","scale","BoxCox"), metric = metric, tuneGrid = sdaGrid)
+
+cm_sda  <- cm(model_sda, test)
+
+#print(cm_sda)
+
+# Calculate the probabilites scores
+p3 <- predict(model_sda, newdata = test, type = "prob")
+
+# Draw the ROC plots to compare default cutoff value and best cutoff value
+
+cutoff <- roc_cutoff(model_sda, test, "credit_rating")
+
+pred_sda <- ifelse(p3[,1] >= cutoff, "bad","good")
+
+print("Optimized cutoff predictions")
+
+confusionMatrix(factor(pred_sda, levels = c("bad","good")), test$credit_rating)
+
+# Stop the cluster
+stopCluster(cl)
+```
+
+### Let us compare the final tuned models
+
+```{r comapareAgain}
+resample_results <- resamples(list(NN = model_nnet, SVM = model_svm, SDA = model_sda))
+
+# Print the results
+summary(resample_results,metric = c("Kappa","Accuracy"))
+# Plot Kappa values
+densityplot(resample_results , metric = "Kappa" ,auto.key = list(columns = 3))
+# plot all (higher is better)
+bwplot(resample_results , metric = c("Kappa","Balanced_Accuracy"))
+# plot logLoss values boxplots (lower is better)
+bwplot(resample_results , metric = c("logLoss","Sensitivity"))
+
+
+# Find model correlation
+mcr <- modelCor(resample_results)
+print(mcr)
+
+# Create a scatter plot matrix
+splom(resample_results)
+
+# Statistical significance test
+differnce  <- diff(resample_results)
+# summarize the p-values for pair wise comparision
+summary(differnce)
+```
+
+## Consensus model
+
+Consensus model was created by combining the predictions from individual tuned models and taking the majority vote.
+
+```{r consensus_model}
+pred_all <- bind_cols(nnet = pred_nnet, svm = pred_svm, sda = pred_sda)
+
+pred_all$consensus <- apply(pred_all, 1, chooseMajorityVote)
+
+#cm_final <- confusionMatrix(factor(pred_all$consensus, levels = c("bad","good")), test$credit_rating)
+#print(cm_final)
+
+# print(pred_all)
+
+
+print("==============Calculate Probabilities =============")
+# Calculate probabilities of prediction and multiply by the balanced accuracy of each model for weighted predictions.
+
+algos <- names(pred_all)[-length(names(pred_all))]
+
+for (algo in algos)
+  {
+  #print(algo)
+  assign(paste0("sens","_",algo), sensitivity(factor(get(paste0("pred","_",algo)), levels = c("bad","good")), test$credit_rating))
+assign(paste0("spec","_",algo), specificity(factor(get(paste0("pred","_",algo)), levels = c("bad","good")), test$credit_rating))
+  }
+
+ print("==============balanced accuracy score ========") 
+
+prob_all <- bind_cols(nnet = p1[,1] * (sens_nnet + spec_nnet)/2, svm = p2[,1] * (sens_svm + spec_svm)/2, sda = p3[,1] * (sens_sda + spec_sda)/2) 
+
+ prob_all$final_ba <- rowMeans(prob_all) 
+
+ pred <- prediction(prob_all$final_ba, test[,"credit_rating"], label.ordering = c("good","bad")) 
+ eval <- performance(pred, "tpr","fpr") 
+ plot(eval) 
+
+
+ max <- which.max(slot(eval,"y.values")[[1]] +  1 - slot(eval,"x.values")[[1]]) 
+ # get the best cutoff value 
+ cutoff <- slot(eval, "alpha.values")[[1]][max] 
+ tpr <- slot(eval, "y.values")[[1]][max] 
+ fpr <- slot(eval, "x.values")[[1]][max] 
+ abline(h = tpr, v = fpr, lty = 2, col = "blue") # best cutoff 
+ text(0.7,0.2, paste0("At best cutoff = ", round(cutoff,2)), col = "blue") 
+ # Default cutoff 
+ default <- last(which(slot(eval, "alpha.values")[[1]] >= 0.5)) 
+ defaulty <- slot(eval,"y.values")[[1]][default] 
+ defaultx <- slot(eval,"x.values")[[1]][default] 
+ abline(h = defaulty, v = defaultx, col = "red", lty = 2) # Default cutoff 
+ text(0.7,0.3, paste0("At default cutoff = ", 0.50), col = "red") 
+
+ prob_all$labels_ba <- ifelse(prob_all$final_ba >= cutoff, "bad","good") 
+ print(prob_all) 
+
+ cm_final_prob <- confusionMatrix(factor(prob_all$labels_ba, levels = c("bad","good")), test$credit_rating) 
+ print(cm_final_prob) 
+``` 
+
+## Ensemble model 
+
+Lets us build an ensemble models with and 'glm' as a meta-learner and our three tuned models(nn, svm and sda) as base learners. Finally, we can compare the results of ensemble models with individual models and the consensus predictions of individual models. 
+
+```{r ensemble_model} 
+ library("doParallel") 
+ cl <- makeCluster(2) 
+ registerDoParallel(cl) 
+
+ models <- list(nnet = model_nnet, svmRadial = model_svm, sda = model_sda) 
+
+
+  class(models) <- "caretList" 
+
+ stackControl <- trainControl(method = "repeatedcv", number = 10, repeats = 5, savePredictions = TRUE, classProbs = TRUE, summary = multiClassSummary) 
+
+ stack.glm_customized <- caretStack(models, method = "glm",metric = metric, trControl = stackControl) 
+
+ stack.lda_customized <- caretStack(models, method = "lda",metric = metric, trControl = stackControl) 
+
+ stopCluster(cl) 
+
+ print("=========glm ensemble model========") 
+
+ p_glm_stack <- predict(stack.glm_customized, newdata = test, type = "prob") %>% data.frame(bad = ., good = 1- .) 
+
+ cutoff <- roc_cutoff(stack.glm_customized, test, "credit_rating") 
+
+ pred_glm_stack <- ifelse(p_glm_stack[,1] >= cutoff, "bad","good") 
+
+ cm_ensemble_glm <- confusionMatrix(factor(pred_glm_stack, levels = c("bad","good")), test$credit_rating) 
+
+ print(cm_ensemble_glm) 
+```
+
+
+## Cost and profit analysis
+
+All these statistical tests must be translated into profits for the lender. Let us assume that a correct decision by the lender would result in a 30% profit at the end of 5 years. A correct decision here means that the lender predicts an applicant to be good and the applicant actually turns out be creditworthy. Otherwise, if the opposite is true then the lender predicts good but the applicant turns out to be non-creditworthy, it is 100% loss to the lender. Similarly, if the lender predicts an applicant bad but it is actually a creditworthy customer then the lender incurs no loss however, opportunity is lost. The cost matrix is as follows:
+
+### Cost Matrix:
+
+```{r, costmatrix}    
+ref = data.frame(bad = 0, good = -0.30)
+pred = data.frame(bad = -1.00 , good = +0.30 )
+
+cm <- rbind(ref,pred)
+rownames(cm) <- c("bad","good")
+kable(cm) %>% kable_styling("striped", full_width = F) %>%  column_spec(1, bold = T, border_right = T) %>% add_header_above(c("Predicted" = 1, "Reference" = 2)) 
+```
+
+According to the data out of 1000 applicant 700 are good (creditworthy). A lender without any model would incur $[0.7 * 0.3 + 0.3 * (-1.0)] = -0.07$ or __0.07 unit loss__. If the median loan amount is 2900 DM, then the __total loss will be 203000 DM and per applicant, the loss will be 203 DM.__ 
+
+However, from the best model a lender will have the following changes:
+
+```{r bestmodel}
+kable(as.matrix(cm_final_prob)) %>% kable_styling("striped", full_width = F) %>%  column_spec(1, bold = T, border_right = T)
+```
+
+57.5% (115/200) of the customers will be correctly classified as good. 12.5% (25/200) of customers will be classified as of bad credit profile when they have good credit history while only 6% (12/200) of the customers will be wrongly classified having good credit profile when they are not creditworthy.
+
+therefore, the lender will have $[0.575 * 0.3 + 0.125 * (-0.3) + 0.06 * (-1) ] = + 0.075$ or __0.075 unit profit__. With the median amount 2900 DM, the __total profit will be 217500 DM and per applicant profit will be 217.5.__
+
+
+## Conclusions 
+
+In this report, we compared 10 different popular classification techniques using the caret package in R to identify potential defaulters based on the well-known German credit dataset. Once potential defaulters are identified, proactive approaches can be developed to minimize the risk to the lender. Following were the conclusions from the analysis: 
+
+1. The results show that the good classification model to predict credit risk based on German credit data can be obtained by a variety of methods. Simple models like _sda_ give an equivalent perfromance as compared to more complex models like _xgb_ or _svm_. 
+
+ 2. Right cutoff value almost always boosts model performance as compared to the default value. 
+
+ 3. Simply by combining top performing models and creating a combined prediction can increase prediction accuracy and make the predictions more robust. 
+
+ 4. Caret package in R provides a useful and convenient interface for creating ensemble models. Ensemble models also can increase the accuracy of prediction although, further tuning of ensemble models is possible to obtain even higher accuracy. 
+
+
+
+## References 
+
+ Zhang, Zhongheng. 2016. “Decision Tree Modeling Using R.” Annals of Translational Medicine 4 (15). 
+
+ Bruce, Peter, and Andrew Bruce. 2017. Practical Statistics for Data Scientists. O’Reilly Media. 
+
+ James, Gareth, Daniela Witten, Trevor Hastie, and Robert Tibshirani. 2014. An Introduction to Statistical Learning: With Applications in R. Springer Publishing Company, Incorporated. 
+
+ Kuhn, M., The caret package, Retrieved from http://topepo.github.io/caret/index.html 
+
+
